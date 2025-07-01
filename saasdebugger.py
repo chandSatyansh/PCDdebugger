@@ -55,6 +55,7 @@ def collect_health_checks():
         "compute_services": ["openstack", "compute", "service", "list"],
         "resource_providers": ["openstack", "resource", "provider", "list"],
         "network_agents": ["openstack", "network", "agent", "list"],
+        "hypervisors": ["openstack", "hypervisor", "list", "--long"],
         "volume_services": ["openstack", "volume", "service", "list"],
     }
     for name, cmd in cmds.items():
