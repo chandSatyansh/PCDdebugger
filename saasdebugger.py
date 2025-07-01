@@ -6,6 +6,7 @@ import os
 import json
 from datetime import datetime, timezone
 import shutil
+import re
 
 DEFAULT_OUTPUT_DIR = f"openstack-debug-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
 OUTPUT_DIR = DEFAULT_OUTPUT_DIR
@@ -28,28 +29,38 @@ def extract_id(raw):
     if isinstance(raw, dict):
         return raw.get("id")
     elif isinstance(raw, str):
-        import re
         match = re.search(r"\(([a-f0-9\-]{36})\)", raw)
         return match.group(1) if match else raw.strip()
     return None
 
 def check_openstack_auth():
     print("[INFO] Checking OpenStack authentication...")
-    test_cmd = run_cmd(["openstack", "token", "issue"])
-    if "ERROR" in test_cmd or "Missing" in test_cmd:
-        print("[ERROR] OpenStack CLI is not authenticated. Please source your adminrc.")
+
+    required_envs = ["OS_AUTH_URL", "OS_USERNAME", "OS_PROJECT_NAME"]
+    missing_vars = [var for var in required_envs if not os.environ.get(var)]
+    if missing_vars:
+        print(f"[ERROR] Missing environment variables: {', '.join(missing_vars)}")
+        print("[HINT] Please source your OpenStack RC file (e.g., `source ~/admin-openrc.sh`)")
         exit(1)
+
+    result = run_cmd(["openstack", "token", "issue"])
+    if "ERROR" in result or "Missing" in result or "Failed" in result:
+        print("[ERROR] Unable to authenticate with OpenStack.")
+        print("[HINT] Please ensure your RC file is sourced and credentials are correct.")
+        exit(1)
+
     print("[OK] OpenStack authentication validated.")
 
 def collect_health_checks():
     os.makedirs(f"{OUTPUT_DIR}/health", exist_ok=True)
+
     cmds = {
         "compute_services": ["openstack", "compute", "service", "list"],
         "resource_providers": ["openstack", "resource", "provider", "list"],
         "network_agents": ["openstack", "network", "agent", "list"],
         "volume_services": ["openstack", "volume", "service", "list"],
-        "hypervisors": ["openstack", "hypervisor", "list", "--long"]
     }
+
     for name, cmd in cmds.items():
         output = run_cmd(cmd)
         save_text(output, f"{OUTPUT_DIR}/health/{name}.txt")
@@ -118,17 +129,17 @@ def collect_security_groups_for_vm(vm_id):
 
 def collect_volumes_for_vm(vm_id):
     os.makedirs(f"{OUTPUT_DIR}/cinder", exist_ok=True)
-    try:
-        vm_json = json.loads(run_cmd(["openstack", "server", "show", vm_id, "-f", "json"]))
-        attached_vols = vm_json.get("os-extended-volumes:volumes_attached", [])
-        save_text(json.dumps(attached_vols, indent=2), f"{OUTPUT_DIR}/cinder/attached_volumes.txt")
+    vols_raw = run_cmd(["openstack", "volume", "list", "--server", vm_id])
+    save_text(vols_raw, f"{OUTPUT_DIR}/cinder/attached_volumes.txt")
 
-        for vol in attached_vols:
-            vol_id = vol.get("id")
+    try:
+        vols_json = run_cmd(["openstack", "volume", "list", "--server", vm_id, "-f", "json"])
+        vols = json.loads(vols_json) if vols_json and vols_json.strip().startswith("[") else []
+        for vol in vols:
+            vol_id = vol.get("ID")
             if vol_id:
                 vol_detail = run_cmd(["openstack", "volume", "show", vol_id])
                 save_text(vol_detail, f"{OUTPUT_DIR}/cinder/volume_{vol_id}.txt")
-
     except Exception as e:
         print(f"[WARN] Failed to collect volumes for VM: {e}")
 
@@ -180,9 +191,12 @@ def main():
     parser = argparse.ArgumentParser(description="OpenStack Debug Collector")
     parser.add_argument("--output", default=DEFAULT_OUTPUT_DIR, help="Output directory")
     parser.add_argument("--vm", help="VM ID")
+    parser.add_argument("--network", help="Network ID")
+    parser.add_argument("--port", help="Port ID")
+    parser.add_argument("--volume", help="Volume ID")
+    parser.add_argument("--zip", action="store_true", help="Zip output")
     parser.add_argument("--stack", help="Heat Stack ID")
     parser.add_argument("--user", help="Keystone User ID or Name")
-    parser.add_argument("--zip", action="store_true", help="Zip the output")
 
     args = parser.parse_args()
     OUTPUT_DIR = args.output
@@ -205,7 +219,7 @@ def main():
     if args.user:
         collect_keystone_user_info(args.user)
 
-    summary = f"""OpenStack Debug Summary - {datetime.now(timezone.utc).isoformat()} UTC"""
+    summary = f"""Debug Summary - {datetime.now(timezone.utc).isoformat()} UTC"""
     save_text(summary, f"{OUTPUT_DIR}/summary.txt")
 
     if args.zip:
@@ -213,3 +227,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
