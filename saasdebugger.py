@@ -35,7 +35,6 @@ def extract_id(raw):
 
 def check_openstack_auth():
     print("[INFO] Checking OpenStack authentication...")
-
     required_envs = ["OS_AUTH_URL", "OS_USERNAME", "OS_PROJECT_NAME"]
     missing_vars = [var for var in required_envs if not os.environ.get(var)]
     if missing_vars:
@@ -48,27 +47,23 @@ def check_openstack_auth():
         print("[ERROR] Unable to authenticate with OpenStack.")
         print("[HINT] Please ensure your RC file is sourced and credentials are correct.")
         exit(1)
-
     print("[OK] OpenStack authentication validated.")
 
 def collect_health_checks():
     os.makedirs(f"{OUTPUT_DIR}/health", exist_ok=True)
-
     cmds = {
         "compute_services": ["openstack", "compute", "service", "list"],
         "resource_providers": ["openstack", "resource", "provider", "list"],
         "network_agents": ["openstack", "network", "agent", "list"],
         "volume_services": ["openstack", "volume", "service", "list"],
     }
-
     for name, cmd in cmds.items():
         output = run_cmd(cmd)
         save_text(output, f"{OUTPUT_DIR}/health/{name}.txt")
 
 def collect_nova_info(vm_id):
     os.makedirs(f"{OUTPUT_DIR}/nova", exist_ok=True)
-
-    info_text = run_cmd(["openstack", "server", "show", vm_id])
+    info_text = run_cmd(["openstack", "server", "show", vm_id, "--fit-width", "--max-width", "500"])
     save_text(info_text, f"{OUTPUT_DIR}/nova/server_show.txt")
 
     events = run_cmd(["openstack", "server", "event", "list", vm_id])
@@ -78,7 +73,8 @@ def collect_nova_info(vm_id):
     save_text(migrations, f"{OUTPUT_DIR}/nova/migrations.txt")
 
     try:
-        return json.loads(run_cmd(["openstack", "server", "show", vm_id, "-f", "json"]))
+        json_output = run_cmd(["openstack", "server", "show", vm_id, "-f", "json"])
+        return json.loads(json_output)
     except Exception as e:
         print(f"[WARN] Failed to parse VM details: {e}")
         return {}
@@ -96,11 +92,13 @@ def collect_ports_for_vm(vm_id):
                 port_detail = run_cmd(["openstack", "port", "show", port_id])
                 save_text(port_detail, f"{OUTPUT_DIR}/neutron/port_{port_id}.txt")
 
+                port_json = run_cmd(["openstack", "port", "show", port_id, "-f", "json"])
+                save_text(port_json, f"{OUTPUT_DIR}/neutron/port_{port_id}.json")
+
             network_id = port.get("Network ID")
             if network_id:
                 net_detail = run_cmd(["openstack", "network", "show", network_id])
                 save_text(net_detail, f"{OUTPUT_DIR}/neutron/network_{network_id}.txt")
-
     except Exception as e:
         print(f"[WARN] Failed to process VM ports or networks: {e}")
 
@@ -111,11 +109,24 @@ def collect_security_groups_for_vm(vm_id):
         sg_ids = set()
 
         for port in ports:
-            sgs = port.get("Security Group") or port.get("Security Groups")
-            if isinstance(sgs, list):
-                sg_ids.update(sgs)
-            elif isinstance(sgs, str) and sgs.startswith("["):
-                sg_ids.update(json.loads(sgs))
+            port_id = port.get("ID")
+            if not port_id:
+                continue
+
+            port_json_str = run_cmd(["openstack", "port", "show", port_id, "-f", "json"])
+            try:
+                port_json = json.loads(port_json_str)
+                save_text(json.dumps(port_json, indent=2), f"{OUTPUT_DIR}/neutron/port_{port_id}.json")
+                sgs = port_json.get("security_group_ids", [])
+                if isinstance(sgs, list):
+                    sg_ids.update(sgs)
+            except Exception as e:
+                print(f"[WARN] Could not parse port {port_id} JSON: {e}")
+
+        if not sg_ids:
+            print(f"[WARN] No security groups found on any VM ports.")
+        else:
+            print(f"[INFO] Found {len(sg_ids)} unique security groups for VM.")
 
         for sg_id in sg_ids:
             print(f"[INFO] Fetching security group: {sg_id}")
@@ -129,7 +140,6 @@ def collect_security_groups_for_vm(vm_id):
 
 def collect_volumes_for_vm(vm_id):
     os.makedirs(f"{OUTPUT_DIR}/cinder", exist_ok=True)
-
     try:
         vm_json = json.loads(run_cmd(["openstack", "server", "show", vm_id, "-f", "json"]))
         attached_vols = vm_json.get("os-extended-volumes:volumes_attached", [])
@@ -145,7 +155,6 @@ def collect_volumes_for_vm(vm_id):
 
 def collect_stack_info(stack_id):
     os.makedirs(f"{OUTPUT_DIR}/heat", exist_ok=True)
-
     stack_show = run_cmd(["openstack", "stack", "show", stack_id])
     save_text(stack_show, f"{OUTPUT_DIR}/heat/stack_show.txt")
 
