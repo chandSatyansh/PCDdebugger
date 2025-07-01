@@ -129,14 +129,14 @@ def collect_security_groups_for_vm(vm_id):
 
 def collect_volumes_for_vm(vm_id):
     os.makedirs(f"{OUTPUT_DIR}/cinder", exist_ok=True)
-    vols_raw = run_cmd(["openstack", "volume", "list", "--server", vm_id])
-    save_text(vols_raw, f"{OUTPUT_DIR}/cinder/attached_volumes.txt")
 
     try:
-        vols_json = run_cmd(["openstack", "volume", "list", "--server", vm_id, "-f", "json"])
-        vols = json.loads(vols_json) if vols_json and vols_json.strip().startswith("[") else []
-        for vol in vols:
-            vol_id = vol.get("ID")
+        vm_json = json.loads(run_cmd(["openstack", "server", "show", vm_id, "-f", "json"]))
+        attached_vols = vm_json.get("os-extended-volumes:volumes_attached", [])
+        save_text(json.dumps(attached_vols, indent=2), f"{OUTPUT_DIR}/cinder/attached_volumes.txt")
+
+        for vol in attached_vols:
+            vol_id = vol.get("id")
             if vol_id:
                 vol_detail = run_cmd(["openstack", "volume", "show", vol_id])
                 save_text(vol_detail, f"{OUTPUT_DIR}/cinder/volume_{vol_id}.txt")
@@ -227,5 +227,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
