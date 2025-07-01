@@ -98,8 +98,6 @@ debug-output-YYYYMMDD-HHMMSS/
 ./pcddebugger.py \
   --namespace supportinternal-region-one \
   --vm 95c6cf8e-8b18-43cc-9c3e-87424139e611 \
-  --stack my_stack_id \
-  --user demo \
   --zip
 ```
 
