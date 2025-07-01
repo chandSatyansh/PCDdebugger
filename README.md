@@ -97,8 +97,7 @@ debug-output-YYYYMMDD-HHMMSS/
 ```bash
 ./pcddebugger.py \
   --namespace supportinternal-region-one \
-  --vm 95c6cf8e-8b18-43cc-9c3e-87424139e611 \
-  --zip
+  --vm 95c6cf8e-8b18-43cc-9c3e-87424139e611 
 ```
 
 ---
@@ -172,8 +171,7 @@ python3 saasdebugger.py --vm <vm_id> [OPTIONS]
 
 ```bash
 python3 saasdebugger.py \
-  --vm 95c6cf8e-8b18-43cc-9c3e-87424139e611 \
-  --zip
+  --vm 95c6cf8e-8b18-43cc-9c3e-87424139e611 
 ```
 
 ---
