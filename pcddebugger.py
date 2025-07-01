@@ -62,12 +62,14 @@ def check_openstack_auth():
 
 def collect_health_checks():
     os.makedirs(f"{OUTPUT_DIR}/health", exist_ok=True)
+
     cmds = {
         "compute_services": ["openstack", "compute", "service", "list"],
         "resource_providers": ["openstack", "resource", "provider", "list"],
         "network_agents": ["openstack", "network", "agent", "list"],
         "volume_services": ["openstack", "volume", "service", "list"],
     }
+
     for name, cmd in cmds.items():
         output = run_cmd(cmd)
         save_text(output, f"{OUTPUT_DIR}/health/{name}.txt")
@@ -81,16 +83,18 @@ def collect_pod_logs(namespace, service_name_contains):
         print("[ERROR] Failed to parse pod JSON")
         return
 
-    matched_pods = [p for p in pods['items'] if service_name_contains in p['metadata']['name']]
+    matched_pods = [p for p in pods['items'] if service_name_contains in p['metadata']['name'].lower()]
     for pod in matched_pods:
         pod_name = pod['metadata']['name']
         containers = [c['name'] for c in pod['spec'].get('containers', [])]
         for container in containers:
             log = run_cmd(["kubectl", "logs", pod_name, "-n", namespace, "-c", container])
             save_text(log, f"{OUTPUT_DIR}/logs/{service_name_contains}_{pod_name}_{container}.log")
+
             log_prev = run_cmd(["kubectl", "logs", pod_name, "-n", namespace, "-c", container, "--previous"])
             if "ERROR" not in log_prev:
                 save_text(log_prev, f"{OUTPUT_DIR}/logs/{service_name_contains}_{pod_name}_{container}_previous.log")
+
         desc = run_cmd(["kubectl", "describe", "pod", pod_name, "-n", namespace])
         save_text(desc, f"{OUTPUT_DIR}/describe/{service_name_contains}_{pod_name}.txt")
 
@@ -100,34 +104,27 @@ def collect_namespace_events(namespace):
 
 def collect_nova_info(vm_id):
     os.makedirs(f"{OUTPUT_DIR}/nova", exist_ok=True)
-    info = run_cmd(["openstack", "server", "show", vm_id])
-    save_text(info, f"{OUTPUT_DIR}/nova/server_show.txt")
+
+    info_text = run_cmd(["openstack", "server", "show", vm_id])
+    save_text(info_text, f"{OUTPUT_DIR}/nova/server_show.txt")
+
     events = run_cmd(["openstack", "server", "event", "list", vm_id])
     save_text(events, f"{OUTPUT_DIR}/nova/server_events.txt")
+
     migrations = run_cmd(["openstack", "server", "migration", "list", "--server", vm_id])
     save_text(migrations, f"{OUTPUT_DIR}/nova/migrations.txt")
-    try:
-        return json.loads(info)
-    except:
-        return {}
 
-def collect_server_event_details(vm_id):
     try:
-        event_list_json = run_cmd(["openstack", "server", "event", "list", vm_id, "-f", "json"])
-        events = json.loads(event_list_json)
-        save_text(json.dumps(events, indent=2), f"{OUTPUT_DIR}/nova/server_event_list.json")
-        for event in events:
-            req_id = event.get("Request ID")
-            if req_id:
-                detail = run_cmd(["openstack", "server", "event", "show", vm_id, req_id])
-                save_text(detail, f"{OUTPUT_DIR}/nova/server_event_{req_id}.txt")
+        return json.loads(run_cmd(["openstack", "server", "show", vm_id, "-f", "json"]))
     except Exception as e:
-        print(f"[WARN] Failed to collect server event details: {e}")
+        print(f"[WARN] Failed to parse VM details: {e}")
+        return {}
 
 def collect_ports_for_vm(vm_id):
     os.makedirs(f"{OUTPUT_DIR}/neutron", exist_ok=True)
     ports_raw = run_cmd(["openstack", "port", "list", "--device-id", vm_id])
     save_text(ports_raw, f"{OUTPUT_DIR}/neutron/vm_ports.txt")
+
     try:
         ports = json.loads(run_cmd(["openstack", "port", "list", "--device-id", vm_id, "-f", "json"]))
         for port in ports:
@@ -135,10 +132,12 @@ def collect_ports_for_vm(vm_id):
             if port_id:
                 port_detail = run_cmd(["openstack", "port", "show", port_id])
                 save_text(port_detail, f"{OUTPUT_DIR}/neutron/port_{port_id}.txt")
+
             network_id = port.get("Network ID")
             if network_id:
                 net_detail = run_cmd(["openstack", "network", "show", network_id])
                 save_text(net_detail, f"{OUTPUT_DIR}/neutron/network_{network_id}.txt")
+
     except Exception as e:
         print(f"[WARN] Failed to process VM ports or networks: {e}")
 
@@ -147,41 +146,49 @@ def collect_security_groups_for_vm(vm_id):
     try:
         ports = json.loads(run_cmd(["openstack", "port", "list", "--device-id", vm_id, "-f", "json"]))
         sg_ids = set()
+
         for port in ports:
             sgs = port.get("Security Group") or port.get("Security Groups")
             if isinstance(sgs, list):
                 sg_ids.update(sgs)
             elif isinstance(sgs, str) and sgs.startswith("["):
                 sg_ids.update(json.loads(sgs))
+
         for sg_id in sg_ids:
+            print(f"[INFO] Fetching security group: {sg_id}")
             sg_detail = run_cmd(["openstack", "security", "group", "show", sg_id])
             sg_rules = run_cmd(["openstack", "security", "group", "rule", "list", sg_id])
             save_text(sg_detail, f"{OUTPUT_DIR}/neutron/security_group_{sg_id}.txt")
             save_text(sg_rules, f"{OUTPUT_DIR}/neutron/security_group_{sg_id}_rules.txt")
+
     except Exception as e:
         print(f"[WARN] Failed to collect security group info: {e}")
 
 def collect_volumes_for_vm(vm_id):
     os.makedirs(f"{OUTPUT_DIR}/cinder", exist_ok=True)
     try:
-        server_info_json = run_cmd(["openstack", "server", "show", vm_id, "-f", "json"])
-        server_info = json.loads(server_info_json)
-        vols_attached = server_info.get("os-extended-volumes:volumes_attached", [])
-        save_text(json.dumps(vols_attached, indent=2), f"{OUTPUT_DIR}/cinder/attached_volumes.json")
-        for vol in vols_attached:
+        vm_json = json.loads(run_cmd(["openstack", "server", "show", vm_id, "-f", "json"]))
+        attached_vols = vm_json.get("os-extended-volumes:volumes_attached", [])
+        save_text(json.dumps(attached_vols, indent=2), f"{OUTPUT_DIR}/cinder/attached_volumes.txt")
+
+        for vol in attached_vols:
             vol_id = vol.get("id")
             if vol_id:
                 vol_detail = run_cmd(["openstack", "volume", "show", vol_id])
                 save_text(vol_detail, f"{OUTPUT_DIR}/cinder/volume_{vol_id}.txt")
+
     except Exception as e:
         print(f"[WARN] Failed to collect volumes for VM: {e}")
 
 def collect_stack_info(stack_id):
     os.makedirs(f"{OUTPUT_DIR}/heat", exist_ok=True)
+
     stack_show = run_cmd(["openstack", "stack", "show", stack_id])
     save_text(stack_show, f"{OUTPUT_DIR}/heat/stack_show.txt")
+
     resource_list_raw = run_cmd(["openstack", "stack", "resource", "list", stack_id])
     save_text(resource_list_raw, f"{OUTPUT_DIR}/heat/stack_resources.txt")
+
     try:
         resources = json.loads(run_cmd(["openstack", "stack", "resource", "list", stack_id, "-f", "json"]))
         for res in resources:
@@ -195,6 +202,8 @@ def collect_stack_info(stack_id):
 def collect_image_and_flavor(vm_data):
     image_id = extract_id(vm_data.get("image"))
     flavor_id = extract_id(vm_data.get("flavor"))
+    print(f"[DEBUG] image_id = {image_id}, flavor_id = {flavor_id}")
+
     if image_id:
         image = run_cmd(["openstack", "image", "show", image_id])
         save_text(image, f"{OUTPUT_DIR}/glance/image_show.txt")
@@ -206,6 +215,7 @@ def collect_keystone_user_info(user_id_or_name):
     os.makedirs(f"{OUTPUT_DIR}/keystone", exist_ok=True)
     user_info = run_cmd(["openstack", "user", "show", user_id_or_name])
     save_text(user_info, f"{OUTPUT_DIR}/keystone/user_show.txt")
+
     role_assignments = run_cmd(["openstack", "role", "assignment", "list", "--user", user_id_or_name, "--names"])
     save_text(role_assignments, f"{OUTPUT_DIR}/keystone/user_role_assignments.txt")
 
@@ -238,21 +248,26 @@ def main():
     vm_data = {}
     if args.vm:
         vm_data = collect_nova_info(args.vm)
-        collect_server_event_details(args.vm)
         collect_image_and_flavor(vm_data)
         collect_ports_for_vm(args.vm)
         collect_volumes_for_vm(args.vm)
         collect_security_groups_for_vm(args.vm)
-        for comp in ["nova", "glance", "keystone", "neutron", "cinder"]:
+        for comp in ["nova", "glance", "image", "keystone", "neutron", "cinder"]:
             collect_pod_logs(args.namespace, comp)
 
-    if args.network or args.port:
+    if args.network:
         collect_pod_logs(args.namespace, "neutron")
+
+    if args.port:
+        collect_pod_logs(args.namespace, "neutron")
+
     if args.volume:
         collect_pod_logs(args.namespace, "cinder")
+
     if args.stack:
         collect_stack_info(args.stack)
         collect_pod_logs(args.namespace, "heat")
+
     if args.user:
         collect_keystone_user_info(args.user)
         collect_pod_logs(args.namespace, "keystone")
