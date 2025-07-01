@@ -62,7 +62,6 @@ def check_openstack_auth():
 
 def collect_health_checks():
     os.makedirs(f"{OUTPUT_DIR}/health", exist_ok=True)
-
     cmds = {
         "compute_services": ["openstack", "compute", "service", "list"],
         "resource_providers": ["openstack", "resource", "provider", "list"],
